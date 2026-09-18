@@ -1,0 +1,9 @@
+services:
+  gemma4:
+    command: >-
+      --kv-offloading-size 128
+      --kv-offloading-backend native
+  gemma4-mtp:
+    command: >-
+      --kv-offloading-size 128
+      --kv-offloading-backend native

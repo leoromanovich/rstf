@@ -1,0 +1,17 @@
+services:
+  sglang:
+    command: >-
+      --enable-hierarchical-cache
+      --hicache-ratio 1.25
+      --hicache-io-backend direct
+      --hicache-mem-layout page_first_direct
+      --hicache-write-policy write_through_selective
+      --hicache-storage-backend file
+      --hicache-storage-prefetch-policy timeout
+    environment:
+      SGLANG_HICACHE_FILE_BACKEND_EVICTION_RATIO: '0.9'
+      SGLANG_HICACHE_FILE_BACKEND_MAX_SIZE: 10T
+      SGLANG_HICACHE_FILE_BACKEND_MIN_FREE_SPACE: 3T
+      SGLANG_HICACHE_FILE_BACKEND_STORAGE_DIR: /hicache
+    volumes:
+    - /opt/sglang/hicache/dsv4-vision-6821d6a-40b3e15-dpa8:/hicache

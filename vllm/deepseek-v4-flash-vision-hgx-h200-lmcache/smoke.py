@@ -8,7 +8,7 @@ import time
 import urllib.request
 import zlib
 
-BASE = os.environ.get("VLLM_DSV4_BASE_URL", "http://127.0.0.1:30001/v1").rstrip("/")
+BASE = os.environ.get("VLLM_DSV4_BASE_URL", "http://127.0.0.1:30000/v1").rstrip("/")
 MODEL = "deepseek-v4-flash-vision"
 
 

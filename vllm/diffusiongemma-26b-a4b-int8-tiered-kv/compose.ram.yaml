@@ -1,0 +1,5 @@
+services:
+  diffusiongemma:
+    command: >-
+      --kv-offloading-size 128
+      --kv-offloading-backend native

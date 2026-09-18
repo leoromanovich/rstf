@@ -1,181 +1,44 @@
-# DiffusionGemma vLLM на одной GPU
+# diffusiongemma-26b-a4b-int8-tiered-kv
 
-## Запуск и трассировка
+Модель: `diffusiongemma-26B-A4B-it-INT8-dynamic`. A100 80 GB, INT8 compressed-tensors checkpoint, vLLM 0.26.0 cu129. `performance-mode=throughput`, batch 8192, 4 concurrent sequences при context 65536. Небольшой running limit обусловлен памятью diffusion sampler/FP32 head. Исторический RTX 4090 canary исключён из параметров deployment; его GPU acceptance не переносится на A100.
 
-Состав: **vllm + SMG + Collector+ Jaeger**.
-A100 и отдельный 4090 canary, INT8, RAM/SSD KV. Параметры модели и cache budgets сохранены при переносе.
+Throughput budgets: `max-model-len=65536, max-num-seqs=4, max-num-batched-tokens=8192`. Изменение оборудования требует повторной проверки capacity и aggregate tokens/s.
 
-```bash
-cp .env.example .env
-# Настройте пути, API keys в .env.
-# Для экспериментов добавьте RESTART_POLICY=no.
-docker compose config --quiet
-docker compose up -d --build
-```
+## Reasoning
 
-Внешний клиент обращается к SMG на `http://<host>:30000/v1`; укажите одинаковый
-inference API key в `.env` и LiteLLM. Публичный bind по умолчанию — localhost;
-для доступа с другого сервера задайте `SMG_BIND=<LAN IP>`.
-Jaeger: http://localhost:16686. История хранится в RAM и теряется при перезапуске.
+`enable_thinking=true` задан явно: default processor/template оставляет thinking выключенным. У модели нет отдельных effort levels; `medium` задать нельзя. [Google: thinking у DiffusionGemma](https://ai.google.dev/gemma/docs/diffusiongemma/inference-diffusiongemma-with-hf), [vLLM recipe](https://github.com/vllm-project/recipes/blob/main/models/Google/diffusiongemma-26B-A4B-it.yaml).
 
-[Интеграция OWUI/LiteLLM, просмотр запроса и проверочный клиент](../../misc/telemetry/README.md).
-[Запуск через Nix](../../misc/telemetry/README.md#nix).
+## Cache tiers
 
+| Вариант | Compose files |
+|---|---|
+| Без offloading | `docker-compose.yaml` |
+| RAM | база + `compose.ram.yaml` |
+| RAM + SSD | база + `compose.ssd.yaml` |
 
-vLLM `0.26.0`, OpenAI-compatible text/vision API, INT8 W8A8 и cache hierarchy
-GPU → 128 GiB RAM → NVMe. Default рассчитан на A100 80 GB.
+Оба overlay независимо расширяют базу. Совместное применение RAM и SSD overlay не требуется.
+Общие engine flags находятся в folded `entrypoint: >-`; overlay задаёт только `command: >-`.
+Docker передаёт итоговый `entrypoint + command` единым argv. Константы редактируются в Compose.
 
-## Выбор checkpoint
-
-| Профиль | Вес | A100 | Решение |
-| --- | ---: | --- | --- |
-| `aidendle94/...-INT8-dynamic` | 25.3 GiB | Ampere Triton INT8 MoE | default: лучший доступный баланс качества и HBM |
-| `cyankiwi/...-AWQ-INT4` | 16.0 GiB | W4A16, group 32 | A/B после text+vision quality gate |
-| `pixelkaiser/...-AWQ-MLP-W4A16-G64-S32-L1024` | 16.8 GiB | проверен на RTX A6000 | A/B после quality gate |
-| `google/diffusiongemma-26B-A4B-it` | 48.1 GiB | A100 80 GB | контроль качества |
-| FP8 dynamic | 25.3 GiB | fallback kernels, известный Ampere MoE blocker | исключён |
-| NVFP4 | 16.8–17.5 GiB | Hopper/Blackwell path | исключён |
-
-INT8 checkpoint оставляет vision tower, routers, embeddings и
-self-conditioning в BF16. Опубликованные cosine/error значения измеряют
-восстановление весов; итоговое качество подтверждает GPU canary.
+RAM: native OffloadingConnector. SSD: TieringOffloadingSpec с filesystem tier `/kv-cache`, 32 read / 16 write threads. `PYTHONHASHSEED=0`, private IPC, cleanup только `vllm_offload_*.mmap` в приватном `/dev/shm`. SSD должен быть отдельным filesystem/project quota; backend не ограничивает общий объём сам. Для Gemma подготовь quota 2 TiB и минимум 512 GiB free.
 
 ## Запуск
 
-1. Примите лицензию Gemma и скачайте весь snapshot INT8 checkpoint.
-2. Укажите его корень в `MODEL_DIR`. В корне должны лежать `config.json`,
-   tokenizer/processor files, safetensors index и все shards. Compose монтирует
-   этот каталог read-only как `/models`.
-3. Создайте `VLLM_CACHE_DIR` и `KV_CACHE_DIR`. Разместите `KV_CACHE_DIR` на
-   отдельном quota-bounded NVMe filesystem.
-4. Подготовьте env и проверьте host. `.env.example` — A100 80 GB:
+API SMG — `127.0.0.1:30001`; engine — `diffusiongemma:30000` внутри Docker.
+Collector экспортирует метрики движка и SMG на `127.0.0.1:9234/metrics`.
+Внутренний OTLP transport — `otel-collector:4317/4318`; локальный Jaeger UI (где включён) — `127.0.0.1:16686`.
 
-```bash
-cp .env.example .env
-$EDITOR .env
-./preflight.sh
-docker compose config
-docker compose pull
-docker compose up -d
-docker compose logs -f diffusiongemma
-```
+1. Проверь bind paths, GPU и cache budgets в Compose; подготовь каталоги и SSD quota.
+2. Скопируй `.env.example` в защищённый локальный `.env`; задай API/admin keys и внешний OTLP endpoint, где требуется. Константы в env не выносятся.
+3. Через CC feature override вызови `inference-recipe-control vllm/diffusiongemma-26b-a4b-int8-tiered-kv config --cache none`.
+4. На целевом Linux GPU host выполни `preflight --cache none --env-file /secure/recipe.env`.
+5. Для согласованного запуска: `RECIPE_CONFIRM=mutate-inference` и действие `up --cache none --env-file /secure/recipe.env`. Для cache tiers замени `none` на `ram` или `ssd`.
 
-Runtime работает с `HF_HUB_OFFLINE=1` и `TRANSFORMERS_OFFLINE=1`; checkpoint
-через сеть не загружается. Первый запуск компилирует kernels, поэтому healthcheck
-даёт до 30 минут. API слушает `127.0.0.1:8000` и требует `VLLM_API_KEY`.
-Ключ передаётся через environment: CLI argv и startup log его не содержат.
+Lifecycle/Nix: [общая инструкция](../../misc/telemetry/README.md).
+`up` всегда передаёт `--no-build`. Эксперимент: `--experiment` создаёт локальный временный `restart: "no"` override; опубликованный default — `unless-stopped`.
 
-```bash
-export VLLM_API_KEY='значение-из-.env'
-./smoke.py
-./smoke.py --image /path/to/screenshot.png
-```
+## Проверка upstream — 2026-09-18
 
-Smoke повторяет text и image запросы и выводит дельты prefix, external KV,
-RAM/filesystem transfer и multimodal processor cache metrics.
+[vLLM #51579](https://github.com/vllm-project/vllm/issues/51579): native CPU offload оставляет mmap после аварийного выхода; private IPC и cleanup-wrapper ограничивают последствие контейнером. Для DiffusionGemma cold/warm HMA restore на этом checkpoint требует GPU acceptance.
 
-Порядок vision content: изображение, затем текст. Для screenshot/OCR подходит
-`MM_MAX_SOFT_TOKENS=1120`; обычным изображениям часто хватает `560`.
-Структурированные outputs/json schema пока недоступны для DiffusionGemma.
-Субагенту стоит возвращать компактный Markdown: наблюдения, читаемый текст,
-ошибки, следующие проверки и уверенность по каждому OCR-фрагменту. Нечитаемые
-фрагменты помечаются явно; наблюдения отделяются от выводов.
-
-## Профиль A100 80 GB
-
-Default:
-
-```dotenv
-MAX_MODEL_LEN=65536
-MAX_NUM_SEQS=4
-MAX_NUM_BATCHED_TOKENS=8192
-GPU_MEMORY_UTILIZATION=0.85
-```
-
-Diffusion state резервирует крупный FP32 buffer на каждую concurrent sequence.
-Поднимайте concurrency по одной после проверки пикового HBM и p99.
-
-Аварийный low-HBM профиль: `16384/2/4096/0.80`.
-
-## Профиль RTX 4090 48 GB
-
-Canary-профиль учитывает меньшие RAM/disk budgets:
-
-```bash
-cp .env.4090.example .env
-$EDITOR .env
-mkdir -p model cache kv-cache
-./preflight.sh
-```
-
-```dotenv
-MAX_MODEL_LEN=32768
-MAX_NUM_SEQS=2
-MAX_NUM_BATCHED_TOKENS=4096
-GPU_MEMORY_UTILIZATION=0.82
-```
-
-Cache hierarchy: GPU → 24 GiB RAM → local NVMe. В `/data/scratch` требуется
-минимум 64 GiB свободного места. Короткий canary ограничивает число запросов;
-длительная эксплуатация требует quota для `KV_CACHE_DIR`.
-
-Проверено на RTX 4090 48 GB с vLLM 0.26.0: compressed-tensors W8A8 выбрал
-Cutlass INT8 linear и Triton INT8 MoE; weights заняли 25.83 GiB, GPU KV —
-12.1 GiB/166k tokens, steady HBM — 41.6 GiB. Text cold/repeat — 5.02/3.10 с;
-vision cold/filesystem-cached/MM-hot — 4.11/1.82/1.55 с. После restart NVMe
-вернул 239.9 MB KV: 1152 external hits из 1171 queries.
-
-Для W4 A/B замените `VLLM_MODEL`. vLLM читает `compressed-tensors` из checkpoint.
-Сравните минимум 100 реальных text prompts и 100 screenshots: task success,
-OCR exactness, hallucination rate, TTFT, E2E latency и peak HBM.
-
-## KV и disk cache
-
-Default использует native `OffloadingConnector`: GPU prefix cache → 128 GiB
-pinned host RAM → filesystem tier `/kv-cache`. LRU и prompt-only offload полезны
-для повторных system/repository prefixes и многократного анализа одной картинки.
-`MM_PROCESSOR_CACHE_GB=4` кэширует image preprocessing.
-
-Размер RAM tier задаёт `KV_CPU_GIB=128`. Compose передаёт его как
-`--kv-offloading-size 128`; vLLM трактует значение в GiB и добавляет
-`cpu_bytes_to_use` в connector config.
-
-`KV_TRANSFER_CONFIG` уже включает NVMe tier:
-
-```json
-{"kv_connector":"OffloadingConnector","kv_role":"kv_both","kv_connector_extra_config":{"spec_name":"TieringOffloadingSpec","eviction_policy":"lru","offload_prompt_only":true,"secondary_tiers":[{"type":"fs","root_dir":"/kv-cache","n_read_threads":32,"n_write_threads":16}]}}
-```
-
-`preflight.sh` требует минимум `KV_DISK_MIN_FREE_GB=512`. FS connector не задаёт
-capacity limit. Docker Compose также не ограничивает размер bind mount. Лимит
-задаёт отдельный LVM volume, ZFS dataset или XFS/ext4 project quota на
-`KV_CACHE_DIR`; стартовый размер — 2 TiB. Оставьте 5–10% свободного места и
-настройте disk-space alert. Следите за hit rate, promotion latency,
-CPU-cache usage и NVMe writes через `/metrics`. Фиксированный
-`PYTHONHASHSEED=0` сохраняет стабильные block hashes между рестартами.
-`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` запрещён: CUDA VMM может
-инвалидировать pinned KV pages OffloadingConnector.
-
-RAM tier vLLM 0.26 создаёт mmap `/dev/shm/vllm_offload_<engine>.mmap`.
-Аварийный engine exit может оставить этот файл. Compose использует private IPC:
-`VLLM_SHM_GIB=144` для A100 и `40` для RTX 4090. `serve.sh` очищает только
-`vllm_offload_*.mmap` внутри container namespace до старта и после остановки.
-Удаление контейнера освобождает private tmpfs после `SIGKILL`; host `/dev/shm`
-не монтируется. Persistent filesystem KV остаётся в `KV_CACHE_DIR`.
-
-## Диагностика и откат
-
-В startup log ожидаются DiffusionGemma, compressed-tensors INT8 и Triton
-attention. Ошибки FP8 Marlin означают неверный checkpoint. При OOM уменьшите
-`MAX_NUM_SEQS`, затем `MAX_MODEL_LEN` и `GPU_MEMORY_UTILIZATION`.
-
-```bash
-docker compose ps
-docker compose logs --tail=300 diffusiongemma
-curl -H "Authorization: Bearer $VLLM_API_KEY" http://127.0.0.1:8000/metrics
-docker compose down
-```
-
-`down` сохраняет внешний model directory, compile cache и KV cache. Для внешнего
-доступа поставьте TLS reverse proxy. Data URI для изображений уменьшает
-SSRF-поверхность относительно произвольных remote URLs.
+Выбор версий основан на source и опубликованных registry manifests. Проверены schema/merge/argv всех доступных tiers; GPU smoke, reasoning output, tool/vision, throughput и cache restore в этой миграции не запускались. На целевом host проверь запрос без reasoning-параметров, холодный/тёплый prefix cache и повторный запуск SSD tier; сравни correctness и aggregate tokens/s.

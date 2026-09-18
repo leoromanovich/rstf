@@ -1,0 +1,7 @@
+services:
+  sglang:
+    command: >-
+      --enable-hierarchical-cache
+      --hicache-size 64
+      --hicache-io-backend kernel
+      --hicache-write-policy write_through

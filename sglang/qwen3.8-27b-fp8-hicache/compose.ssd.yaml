@@ -1,0 +1,17 @@
+services:
+  sglang:
+    command: >-
+      --enable-hierarchical-cache
+      --hicache-size 64
+      --hicache-write-policy write_through
+      --hicache-io-backend kernel
+      --hicache-mem-layout page_first
+      --hicache-storage-backend file
+      --hicache-storage-prefetch-policy timeout
+    environment:
+      SGLANG_HICACHE_FILE_BACKEND_EVICTION_RATIO: '0.9'
+      SGLANG_HICACHE_FILE_BACKEND_MAX_SIZE: 48Gi
+      SGLANG_HICACHE_FILE_BACKEND_MIN_FREE_SPACE: 20Gi
+      SGLANG_HICACHE_FILE_BACKEND_STORAGE_DIR: /hicache
+    volumes:
+    - /data/scratch/qwen38-sglang-smg/hicache-fp8kv-bf16gdn-mtp-sgl0519:/hicache

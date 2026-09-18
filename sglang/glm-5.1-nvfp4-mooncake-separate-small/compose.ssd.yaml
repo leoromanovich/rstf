@@ -1,0 +1,109 @@
+services:
+  sglang:
+    command: >-
+      --enable-hierarchical-cache
+      --hicache-io-backend kernel
+      --hicache-mem-layout page_first
+      --hicache-size 100
+      --hicache-write-policy write_through_selective
+      --hicache-storage-prefetch-policy timeout
+      --hicache-storage-backend mooncake
+      --hicache-storage-backend-extra-config '"'"'"'{standalone_storage:true,client_server_address:172.29.0.3:50052}'"'"'"'
+    environment:
+      MC_STORE_MEMCPY: '1'
+    volumes: []
+    depends_on:
+      mooncake-store:
+        condition: service_healthy
+        required: true
+  mooncake-master:
+    cap_add:
+    - SYS_NICE
+    - IPC_LOCK
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - python3 -c "import socket; s=socket.create_connection(('127.0.0.1',50051),2); s.close()"
+      timeout: 5s
+      interval: 10s
+      retries: 60
+      start_period: 10s
+    image: lmsysorg/sglang:v0.5.19@sha256:d6e7288627be8b02be88e4bba38e73f6d50e2826869f753c13a4c4385ab3eda9
+    ipc: host
+    logging:
+      driver: json-file
+      options:
+        max-file: '5'
+        max-size: 100m
+    networks:
+      mooncake-internal:
+        ipv4_address: 172.29.0.2
+    restart: unless-stopped
+    security_opt:
+    - seccomp:unconfined
+    shm_size: 64gb
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      stack: 67108864
+    command: >-
+      mooncake_master
+      --rpc_port=50051
+      --metrics_port=9234
+      --enable_http_metadata_server=true
+      --http_metadata_server_port=8080
+      --enable_offload=true
+      --eviction_high_watermark_ratio=0.90
+      --logtostderr=true
+  mooncake-store:
+    cap_add:
+    - SYS_NICE
+    - IPC_LOCK
+    environment:
+      MOONCAKE_DEVICE: ''
+      MOONCAKE_GLOBAL_SEGMENT_SIZE: 512gb
+      MOONCAKE_OFFLOAD_BUCKET_EVICTION_POLICY: lru
+      MOONCAKE_OFFLOAD_FILE_STORAGE_PATH: /mooncake_cache
+      MOONCAKE_OFFLOAD_GB: '6000'
+      MOONCAKE_OFFLOAD_STORAGE_BACKEND_DESCRIPTOR: bucket_storage_backend
+      MOONCAKE_OFFLOAD_USE_URING: '1'
+      MOONCAKE_PROTOCOL: tcp
+      MOONCAKE_THREADS: '16'
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - python3 -c "import socket; s=socket.create_connection(('172.29.0.3',50052),2); s.close()"
+      timeout: 5s
+      interval: 10s
+      retries: 60
+      start_period: 30s
+    image: lmsysorg/sglang:v0.5.19@sha256:d6e7288627be8b02be88e4bba38e73f6d50e2826869f753c13a4c4385ab3eda9
+    ipc: host
+    logging:
+      driver: json-file
+      options:
+        max-file: '5'
+        max-size: 100m
+    networks:
+      mooncake-internal:
+        ipv4_address: 172.29.0.3
+    restart: unless-stopped
+    security_opt:
+    - seccomp:unconfined
+    shm_size: 64gb
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      stack: 67108864
+    volumes:
+    - /opt/sglang/mooncake/glm51-small:/mooncake_cache
+    - ./mooncake-store-entrypoint.sh:/opt/recipe/mooncake-store-entrypoint.sh:ro
+    depends_on:
+      mooncake-master:
+        condition: service_healthy
+        required: true
+    entrypoint:
+    - bash
+    - /opt/recipe/mooncake-store-entrypoint.sh

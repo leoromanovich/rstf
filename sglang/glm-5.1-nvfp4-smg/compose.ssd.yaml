@@ -1,0 +1,16 @@
+services:
+  sglang:
+    command: >-
+      --enable-hierarchical-cache
+      --hicache-io-backend kernel
+      --hicache-size 150
+      --hicache-write-policy write_through_selective
+      --hicache-storage-backend file
+      --hicache-storage-prefetch-policy timeout
+    environment:
+      SGLANG_HICACHE_FILE_BACKEND_STORAGE_DIR: /hicache
+      SGLANG_HICACHE_FILE_BACKEND_MAX_SIZE: 512Gi
+      SGLANG_HICACHE_FILE_BACKEND_MIN_FREE_SPACE: 20Gi
+      SGLANG_HICACHE_FILE_BACKEND_EVICTION_RATIO: '0.9'
+    volumes:
+    - ./cache/filecache-sgl0519:/hicache

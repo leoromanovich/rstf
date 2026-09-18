@@ -1,42 +1,62 @@
 name: deepseek-v4-flash-vision-h200
 services:
   sglang:
-    image: local/deepseek-v4-flash-vision-hgx-h200:tracing
-    platform: linux/amd64
-    restart: ${RESTART_POLICY:-unless-stopped}
-    stop_grace_period: 2m
-    ipc: host
     cap_add:
     - SYS_NICE
-    ports:
-    - 127.0.0.1:${ENGINE_PORT:-30001}:30000
+    deploy:
+      resources:
+        reservations:
+          devices:
+          - capabilities:
+            - gpu
+            driver: nvidia
+            count: 8
     environment:
       HF_TOKEN: ${HF_TOKEN:-}
-      OMP_NUM_THREADS: ${OMP_NUM_THREADS:-16}
-      TRITON_CACHE_DIR: /cache/triton
-      TORCHINDUCTOR_CACHE_DIR: /cache/torchinductor
-      SGLANG_DG_CACHE_DIR: /cache/deepgemm
-      SGLANG_DSV4_REASONING_EFFORT: high
-      SGLANG_HICACHE_FILE_BACKEND_STORAGE_DIR: /hicache
-      SGLANG_HICACHE_FILE_BACKEND_MAX_SIZE: ${HICACHE_MAX_SIZE:-10T}
-      SGLANG_HICACHE_FILE_BACKEND_MIN_FREE_SPACE: ${HICACHE_MIN_FREE_SPACE:-3T}
-      SGLANG_HICACHE_FILE_BACKEND_EVICTION_RATIO: '0.9'
-      OTEL_TRACES_SAMPLER: parentbased_always_on
-      OTEL_SERVICE_NAME: sglang
-      OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: grpc
-      OTEL_BSP_MAX_QUEUE_SIZE: '2048'
+      OMP_NUM_THREADS: '16'
       OTEL_BSP_MAX_EXPORT_BATCH_SIZE: '256'
+      OTEL_BSP_MAX_QUEUE_SIZE: '2048'
       OTEL_BSP_SCHEDULE_DELAY: '1000'
+      OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: grpc
       OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: 'false'
-      SGLANG_TRACE_LEVEL: ${SGLANG_TRACE_LEVEL:-1}
-    volumes:
-    - ${MODEL_CACHE_DIR:-/opt/models/huggingface}:/models
-    - ${HICACHE_DIR:-/opt/sglang/hicache/dsv4-vision-6821d6a-40b3e15-dpa8}:/hicache
-    - kernel-cache:/cache
+      OTEL_SERVICE_NAME: sglang
+      OTEL_TRACES_SAMPLER: parentbased_always_on
+      SGLANG_DG_CACHE_DIR: /cache/deepgemm
+      SGLANG_TRACE_LEVEL: '1'
+      TORCHINDUCTOR_CACHE_DIR: /cache/torchinductor
+      TRITON_CACHE_DIR: /cache/triton
+      SGLANG_API_KEY: ${SGLANG_API_KEY:?set SGLANG_API_KEY}
+      PYTHONHASHSEED: '0'
+    healthcheck:
+      test:
+      - CMD
+      - python3
+      - -c
+      - import os,urllib.request; r=urllib.request.Request('http://127.0.0.1:30000/health',headers={'Authorization':'Bearer '+os.environ['SGLANG_API_KEY']}); urllib.request.urlopen(r,timeout=5).read()
+      interval: 30s
+      timeout: 10s
+      retries: 60
+      start_period: 10m
+    image: lmsysorg/sglang:dev-dsv4-flash-vision@sha256:44a113290011bf87fcfeabc2ed94966bfc90f91b2dbe6239a69de3f35e686cba
+    ipc: host
+    logging:
+      driver: json-file
+      options:
+        max-file: '5'
+        max-size: 100m
+    platform: linux/amd64
+    restart: unless-stopped
+    stop_grace_period: 2m0s
     ulimits:
       memlock: -1
       stack: 67108864
-    command: >-
+    volumes:
+    - /opt/models/huggingface:/models
+    - kernel-cache:/cache
+    depends_on:
+      otel-collector:
+        condition: service_started
+    entrypoint: >-
       python3 -m sglang.launch_server
       --model-path deepseek-ai/DeepSeek-V4-Flash-Vision-Exp
       --revision 6821d6ad3681a4b137b066b76094fa82ebd0a380
@@ -60,64 +80,26 @@ services:
       --tool-call-parser deepseekv4
       --kv-cache-dtype fp8_e4m3
       --page-size 256
-      --chunked-prefill-size '${CHUNKED_PREFILL_SIZE:-32768}'
-      --max-running-requests '${MAX_RUNNING_REQUESTS:-256}'
-      --max-queued-requests '${MAX_QUEUED_REQUESTS_PER_DP:-64}'
-      --cuda-graph-max-bs-decode '${CUDA_GRAPH_MAX_BS:-32}'
+      --chunked-prefill-size 32768
+      --max-running-requests 256
+      --max-queued-requests 64
+      --cuda-graph-max-bs-decode 32
       --schedule-policy fcfs
-      --mem-fraction-static '${MEM_FRACTION_STATIC:-0.85}'
-      --enable-hierarchical-cache
-      --hicache-ratio '${HICACHE_RATIO:-1.25}'
-      --hicache-io-backend direct
-      --hicache-mem-layout page_first_direct
-      --hicache-write-policy write_through_selective
-      --hicache-storage-backend file
-      --hicache-storage-prefetch-policy timeout
+      --mem-fraction-static 0.85
       --enable-metrics
       --enable-cache-report
       --enable-trace
       --otlp-traces-endpoint otel-collector:4317
-    deploy:
-      resources:
-        reservations:
-          devices:
-          - driver: nvidia
-            count: 8
-            capabilities:
-            - gpu
-    healthcheck:
-      test:
-      - CMD
-      - curl
-      - -fsS
-      - --max-time
-      - '20'
-      - http://127.0.0.1:30000/health
-      interval: 30s
-      timeout: 25s
-      retries: 10
-      start_period: 30m
-    logging:
-      driver: json-file
-      options:
-        max-size: 100m
-        max-file: '5'
-    build:
-      context: ../../misc/telemetry
-      dockerfile: Dockerfile.sglang
-      args:
-        SGLANG_BASE_IMAGE: lmsysorg/sglang:dev-dsv4-flash-vision@sha256:44a113290011bf87fcfeabc2ed94966bfc90f91b2dbe6239a69de3f35e686cba
-    depends_on:
-      otel-collector:
-        condition: service_started
+      --default-chat-template-kwargs '{"thinking":true}'
+    command: []
   smg:
     extends:
       file: ../../misc/telemetry/compose.services.yaml
       service: smg
     command: >-
       --host 0.0.0.0
-      --port 30000
-      --worker-urls 'http://${SMG_WORKER_SERVICE:-sglang}:30000'
+      --port 30001
+      --worker-urls http://sglang:30000
       --backend sglang
       --dp-aware
       --policy cache_aware
@@ -126,26 +108,25 @@ services:
       --enable-trace
       --otlp-traces-endpoint otel-collector:4317
       --prometheus-host 0.0.0.0
-      --prometheus-port 29000
+      --prometheus-port 9234
       --health-check-endpoint /health
       --worker-startup-timeout-secs 1800
       --request-timeout-secs 1800
+    ports:
+    - 127.0.0.1:30001:30001
     depends_on:
       otel-collector:
         condition: service_started
-    ports:
-    - ${SMG_BIND:-127.0.0.1}:${SMG_PORT:-30000}:30000
-    - 127.0.0.1:${SMG_METRICS_PORT:-29000}:29000
-    restart: ${RESTART_POLICY:-unless-stopped}
   otel-collector:
     extends:
       file: ../../misc/telemetry/compose.services.yaml
       service: otel-collector
     environment:
       OTLP_UPSTREAM_ENDPOINT: ${OTLP_UPSTREAM_ENDPOINT:?set external OTLP gRPC endpoint}
-      OTLP_UPSTREAM_INSECURE: ${OTLP_UPSTREAM_INSECURE:-false}
+      OTLP_UPSTREAM_INSECURE: 'false'
+      ENGINE_METRICS_TARGET: sglang:30000
+      ENGINE_API_KEY: ${SGLANG_API_KEY:?set SGLANG_API_KEY}
       TELEMETRY_RECIPE: deepseek-v4-flash-vision-hgx-h200
-      TELEMETRY_ENVIRONMENT: ${TELEMETRY_ENVIRONMENT:-production}
-    restart: ${RESTART_POLICY:-unless-stopped}
+      TELEMETRY_ENVIRONMENT: production
 volumes:
   kernel-cache: null
