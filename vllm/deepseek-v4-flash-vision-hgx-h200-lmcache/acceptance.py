@@ -110,20 +110,23 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prompt-tokens", type=int, default=384000)
     parser.add_argument("--run-id", required=True, help="unique synthetic prefix identity; reuse across restore stages")
-    parser.add_argument("--stage", choices=("warm", "ram-restore", "ssd-restore"), default="warm")
+    parser.add_argument("--stage", choices=("base", "warm", "ram-restore", "ssd-restore"), default="base")
     parser.add_argument("--timeout", type=float, default=1800, help="HTTP socket timeout in seconds")
-    parser.add_argument("--metrics-url", default="http://127.0.0.1:8081/metrics")
+    parser.add_argument("--metrics-url", help="LMCache MP metrics endpoint; required for cache stages")
     args = parser.parse_args()
     if not 4096 <= args.prompt_tokens <= 384000 or args.timeout <= 0:
         parser.error("prompt-tokens must be 4096..384000; timeout must be positive")
+    cache_stage = args.stage != "base"
+    if cache_stage and not args.metrics_url:
+        parser.error("cache stages require a qualified LMCache stack and explicit --metrics-url")
     messages, expected, count = fit_prompt(args.prompt_tokens, args.run_id, args.timeout)
     print(json.dumps({"stage": args.stage, "prompt_tokens": count, "max_tokens": 16000}), flush=True)
-    ranks = (0, 0, 1, 7) if args.stage == "warm" else (0,)
+    ranks = (0, 0, 1, 7) if args.stage in {"base", "warm"} else (0,)
     for index, rank in enumerate(ranks):
-        before = metrics(args.metrics_url)
+        before = metrics(args.metrics_url) if cache_stage else {}
         message, timing = stream_chat(messages, rank=rank, timeout=args.timeout, max_tokens=16000)
-        after = metrics(args.metrics_url)
-        assert after, "LMCache /metrics lacks the pinned MP counters after generation"
+        after = metrics(args.metrics_url) if cache_stage else {}
+        assert not cache_stage or after, "LMCache /metrics lacks the pinned MP counters after generation"
         delta = delta_metrics(before, after)
         valid = answer_matches(message.get("content"), expected)
         usage = timing.pop("usage")
@@ -134,12 +137,12 @@ def main():
                   "cache_delta": delta, **cache_evidence(delta)}
         print(json.dumps(report, sort_keys=True), flush=True)
         assert valid, "long-context marker retrieval failed"
-        if args.stage != "warm":
+        if args.stage in {"ram-restore", "ssd-restore"}:
             assert report["ram_to_gpu_observed"], "RAM-to-GPU restore was not observed"
         if args.stage == "ssd-restore":
             assert report["ssd_to_ram_observed"], "SSD-to-RAM restore was not observed"
     print(json.dumps({"correctness_passed": True, "stage": args.stage,
-                      "requires_idle_instance_for_cache_attribution": True}), flush=True)
+                      "requires_idle_instance_for_cache_attribution": cache_stage}), flush=True)
 
 
 if __name__ == "__main__":

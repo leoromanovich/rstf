@@ -1,0 +1,5 @@
+services:
+  vllm:
+    command: >-
+      --kv-offloading-size 100
+      --kv-offloading-backend native

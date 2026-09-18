@@ -134,10 +134,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--base-url",
-        default=os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000/v1"),
+        default=os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:30001/v1"),
     )
     parser.add_argument("--api-key", default=os.environ.get("VLLM_API_KEY"))
-    parser.add_argument("--model", default=os.environ.get("VLLM_SERVED_MODEL"))
+    parser.add_argument("--model", default=os.environ.get("VLLM_SERVED_MODEL", 'gemma4-26b-a4b'))
     parser.add_argument("--image", type=Path)
     parser.add_argument("--structured", action="store_true")
     parser.add_argument("--tool", action="store_true")

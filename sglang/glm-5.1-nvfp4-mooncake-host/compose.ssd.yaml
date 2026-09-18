@@ -1,0 +1,49 @@
+services:
+  sglang:
+    command: >-
+      --enable-hierarchical-cache
+      --hicache-size 256
+      --hicache-io-backend direct
+      --hicache-mem-layout page_first_direct
+      --hicache-write-policy write_through
+      --hicache-storage-backend mooncake
+      --hicache-storage-prefetch-policy best_effort
+      --file-storage-path /mooncake_cache
+      --hicache-storage-backend-extra-config '{"local_hostname":"sglang","metadata_server":"http://mooncake_master:8080/metadata","master_server_address":"mooncake_master:50051","protocol":"tcp","device_name":"","global_segment_size":"64gb","check_server":false,"enable_ssd_offload":true,"ssd_offload_path":"/mooncake_cache"}'
+    environment:
+      MC_STORE_MEMCPY: '1'
+      MOONCAKE_OFFLOAD_FILE_STORAGE_PATH: /mooncake_cache
+      MOONCAKE_OFFLOAD_STORAGE_BACKEND_DESCRIPTOR: bucket_storage_backend
+      MOONCAKE_OFFLOAD_TOTAL_SIZE_LIMIT_BYTES: '7000000000000'
+      MOONCAKE_OFFLOAD_BUCKET_MAX_TOTAL_SIZE: '7000000000000'
+      MOONCAKE_OFFLOAD_BUCKET_EVICTION_POLICY: lru
+      MOONCAKE_OFFLOAD_USE_URING: '1'
+    volumes:
+    - /home/moncacke_cache:/mooncake_cache
+    depends_on:
+      mooncake_master:
+        condition: service_started
+        required: true
+  mooncake_master:
+    image: lmsysorg/sglang:v0.5.19@sha256:d6e7288627be8b02be88e4bba38e73f6d50e2826869f753c13a4c4385ab3eda9
+    ipc: host
+    restart: unless-stopped
+    shm_size: 32gb
+    ulimits:
+      memlock: -1
+    command: >-
+      mooncake_master
+      --rpc_port=50051
+      --metrics_port=9234
+      --enable_http_metadata_server=true
+      --http_metadata_server_port=8080
+      --eviction_high_watermark_ratio=0.95
+      --logtostderr=true
+    healthcheck:
+      test:
+      - CMD
+      - python3
+      - -c
+      - import socket; socket.create_connection(('127.0.0.1',50051),2).close()
+      interval: 10s
+      retries: 60

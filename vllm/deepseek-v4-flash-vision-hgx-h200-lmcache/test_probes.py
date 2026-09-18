@@ -9,7 +9,9 @@ import unittest
 from unittest.mock import patch
 
 from acceptance import answer_matches, cache_evidence, delta_metrics, fit_prompt, parse_metrics
-from control import check_storage
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "misc/telemetry"))
+from preflight import check_storage
 from smoke import collect_stream
 
 
@@ -56,26 +58,39 @@ class StorageFixtures(unittest.TestCase):
             script = root / "trace_probe.py"
             script.write_text("# synthetic fixture\n")
             config = {"services": {
-                "smg": {"volumes": [{"type": "bind", "source": str(script)}]},
-                "lmcache": {"volumes": [{"type": "bind", "source": str(root)}]},
+                "smg": {"volumes": [{"type": "bind", "source": str(script), "target": "/probe.py", "read_only": True}]},
+                "lmcache": {"volumes": [{"type": "bind", "source": str(root), "target": "/kv-cache"}]},
             }}
-            with patch("control.shutil.disk_usage", return_value=SimpleNamespace(free=4_000_000_000_000)) as disk:
-                check_storage(config)
+            with patch("preflight.shutil.disk_usage", return_value=SimpleNamespace(free=4_000_000_000_000)) as disk:
+                check_storage(config, "vllm/deepseek-v4-flash-vision-hgx-h200-lmcache")
                 disk.assert_called_once_with(root)
-            with patch("control.shutil.disk_usage", return_value=SimpleNamespace(free=1_000_000_000_000)):
+            with patch("preflight.shutil.disk_usage", return_value=SimpleNamespace(free=1_000_000_000)):
                 with self.assertRaisesRegex(RuntimeError, "insufficient free storage"):
-                    check_storage(config)
+                    check_storage(config, "vllm/deepseek-v4-flash-vision-hgx-h200-lmcache")
 
     def test_missing_telemetry_source_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = {"services": {"otel-collector": {
-                "volumes": [{"type": "bind", "source": str(Path(tmp) / "missing.yaml")}],
+                "volumes": [{"type": "bind", "source": str(Path(tmp) / "missing.yaml"), "target": "/config.yaml"}],
             }}}
             with self.assertRaisesRegex(RuntimeError, "missing service bind source"):
-                check_storage(config)
+                check_storage(config, "vllm/deepseek-v4-flash-vision-hgx-h200-lmcache")
 
 
 class CacheFixtures(unittest.TestCase):
+    def test_base_stage_has_no_lmcache_dependency(self):
+        from acceptance import main
+        expected = {"START": "a", "MIDDLE": "b", "END": "c"}
+        with patch("sys.argv", ["acceptance", "--run-id", "fixture"]), \
+             patch("acceptance.fit_prompt", return_value=([], expected, 384000)), \
+             patch("acceptance.stream_chat", side_effect=lambda *a, **kw: (
+                 {"content": json.dumps(expected)}, {"usage": {"prompt_tokens": 384000}, "ttft_seconds": 1}
+             )) as chat, patch("acceptance.metrics") as metrics, patch("sys.stdout", new_callable=io.StringIO):
+            main()
+            metrics.assert_not_called()
+            self.assertEqual([c.kwargs["rank"] for c in chat.call_args_list], [0, 0, 1, 7])
+
+
     def test_aggregate_counters_without_retaining_labels(self):
         body = ('# HELP ignored\n'
                 'lmcache_mp_num_chunks_loaded_total{worker_id="0",cache_salt="a"} 12\n'

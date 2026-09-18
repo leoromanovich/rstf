@@ -5,6 +5,20 @@ receivers:
         endpoint: ${env:OTLP_RECEIVER_HOST}:${env:OTLP_RECEIVER_GRPC_PORT}
       http:
         endpoint: ${env:OTLP_RECEIVER_HOST}:${env:OTLP_RECEIVER_HTTP_PORT}
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: engine
+          scrape_interval: 15s
+          authorization:
+            type: Bearer
+            credentials: ${env:ENGINE_API_KEY}
+          static_configs:
+            - targets: ["${env:ENGINE_METRICS_TARGET}"]
+        - job_name: smg
+          scrape_interval: 15s
+          static_configs:
+            - targets: ["smg:9234"]
 processors:
   memory_limiter:
     check_interval: 1s
@@ -46,6 +60,9 @@ processors:
     timeout: 1s
     send_batch_size: 256
 exporters:
+  prometheus:
+    endpoint: 0.0.0.0:9234
+    translation_strategy: NoTranslation
   otlp_grpc:
     endpoint: ${env:OTLP_UPSTREAM_ENDPOINT}
     headers:
@@ -58,6 +75,10 @@ exporters:
       max_elapsed_time: 60s
 service:
   pipelines:
+    metrics:
+      receivers: [prometheus, otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [prometheus]
     traces:
       receivers: [otlp]
       processors: [memory_limiter, filter/probes, transform/metadata_only, resource, batch]

@@ -33,7 +33,7 @@
     "services": [
       "sglang"
     ],
-    "host_network": true
+    "host_network": false
   },
   {
     "path": "sglang/glm-5.1-nvfp4-mooncake-separate",
@@ -87,7 +87,8 @@
     "services": [
       "vllm"
     ],
-    "host_network": true
+    "host_network": false,
+    "cache_blocker": "Published LMCache nightly compatibility with this Vision preview is unverified; a compatible prebuilt image or a separately approved build is required."
   },
   {
     "path": "vllm/diffusiongemma-26b-a4b-int8-tiered-kv",
@@ -115,7 +116,7 @@
     "services": [
       "vllm-kimi-k26"
     ],
-    "host_network": true
+    "host_network": false
   },
   {
     "path": "vllm/kimi-k2.6-tp8",
@@ -133,7 +134,6 @@
     "services": [
       "sglang"
     ],
-    "host_network": false,
-    "transport": "grpc"
+    "host_network": false
   }
 ]

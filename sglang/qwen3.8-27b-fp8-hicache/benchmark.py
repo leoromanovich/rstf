@@ -14,7 +14,7 @@ import uuid
 
 def post_json(base, path, body):
     req = urllib.request.Request(base + path, json.dumps(body).encode(),
-                                 {"Content-Type": "application/json"})
+                                 {"Content-Type": "application/json", "Authorization": "Bearer " + os.environ.get("SGLANG_API_KEY", "")})
     with urllib.request.urlopen(req, timeout=900) as response:
         return json.load(response)
 
@@ -24,7 +24,7 @@ def stream(base, model, prompt, output_tokens, expected_answer=None):
             "temperature": 0, "ignore_eos": True, "stream": True,
             "stream_options": {"include_usage": True}}
     req = urllib.request.Request(base + "/v1/completions", json.dumps(body).encode(),
-                                 {"Content-Type": "application/json"})
+                                 {"Content-Type": "application/json", "Authorization": "Bearer " + os.environ.get("SGLANG_API_KEY", "")})
     start = time.perf_counter()
     first = None
     usage = None
@@ -161,7 +161,7 @@ def precision_check(args, tokenizer):
 
 
 def cache_metrics(url):
-    with urllib.request.urlopen(url, timeout=30) as response:
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"Authorization": "Bearer " + os.environ.get("SGLANG_API_KEY", "")}), timeout=30) as response:
         lines = response.read().decode().splitlines()
     result = {}
     for line in lines:
@@ -283,7 +283,7 @@ def finish_ssd_restore(args, prompt, result, reset_method):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--base-url", default="http://smg:30000")
+    p.add_argument("--base-url", default="http://smg:30001")
     p.add_argument("--model", default="Qwen3.8-27B")
     p.add_argument("--tokenizer", default="/model")
     p.add_argument("--mode", choices=["smoke", "benchmark", "quality", "precision", "ssd-seed", "ssd-restore"], default="benchmark")
@@ -291,7 +291,7 @@ def main():
     p.add_argument("--reset-method", choices=["process_restart", "external_FlushCache"], default="process_restart")
     p.add_argument("--ssd-retrieval", action="store_true", help="Check a known retrieval answer across SSD restore")
     p.add_argument("--worker", default="localhost:19051")
-    p.add_argument("--metrics-url", default="http://localhost:19052/metrics")
+    p.add_argument("--metrics-url", default="http://localhost:30000/metrics")
     p.add_argument("--cache-dir", default="/hicache")
     p.add_argument("--drop-file-cache", action="store_true")
     p.add_argument("--lengths", default="2048,8192")

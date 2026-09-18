@@ -1,183 +1,116 @@
 name: glm-5.1-nvfp4-mooncake-separate
 services:
-  mooncake-master:
-    image: lmsysorg/sglang:v0.5.12.post1-cu130
-    restart: ${RESTART_POLICY:-unless-stopped}
-    ipc: host
-    shm_size: 128gb
-    cap_add:
-    - SYS_NICE
-    - IPC_LOCK
-    security_opt:
-    - seccomp:unconfined
-    environment:
-      TZ: Europe/Moscow
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-      stack: 67108864
-    networks:
-      mooncake-internal:
-        ipv4_address: 172.29.0.2
-    ports:
-    - 127.0.0.1:9003:9003
-    logging:
-      driver: json-file
-      options:
-        max-size: 100m
-        max-file: '5'
-    command: >-
-      mooncake_master
-      --rpc_port=50051
-      --metrics_port=9003
-      --enable_http_metadata_server=true
-      --http_metadata_server_port=8080
-      --enable_offload=true
-      --eviction_high_watermark_ratio=0.90
-      --logtostderr=true
-    healthcheck:
-      test:
-      - CMD-SHELL
-      - python3 -c "import socket; s=socket.create_connection(('127.0.0.1',50051),2); s.close()"
-      interval: 10s
-      timeout: 5s
-      retries: 60
-      start_period: 10s
-  mooncake-store:
-    image: lmsysorg/sglang:v0.5.12.post1-cu130
-    restart: ${RESTART_POLICY:-unless-stopped}
-    ipc: host
-    shm_size: 128gb
-    cap_add:
-    - SYS_NICE
-    - IPC_LOCK
-    security_opt:
-    - seccomp:unconfined
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-      stack: 67108864
-    depends_on:
-      mooncake-master:
-        condition: service_healthy
-    networks:
-      mooncake-internal:
-        ipv4_address: 172.29.0.3
-    environment:
-      TZ: Europe/Moscow
-      MOONCAKE_GLOBAL_SEGMENT_SIZE: 128gb
-      MOONCAKE_PROTOCOL: tcp
-      MOONCAKE_DEVICE: ''
-      MOONCAKE_THREADS: '16'
-      MOONCAKE_OFFLOAD_GB: '6000'
-      MOONCAKE_OFFLOAD_FILE_STORAGE_PATH: /mooncake_cache
-      MOONCAKE_OFFLOAD_STORAGE_BACKEND_DESCRIPTOR: bucket_storage_backend
-      MOONCAKE_OFFLOAD_BUCKET_EVICTION_POLICY: lru
-      MOONCAKE_OFFLOAD_USE_URING: '1'
-    volumes:
-    - /home/cache/mooncake_cache:/mooncake_cache
-    - ./mooncake-store-entrypoint.sh:/opt/recipe/mooncake-store-entrypoint.sh:ro
-    logging:
-      driver: json-file
-      options:
-        max-size: 100m
-        max-file: '5'
-    healthcheck:
-      test:
-      - CMD-SHELL
-      - python3 -c "import socket; s=socket.create_connection(('172.29.0.3',50052),2); s.close()"
-      interval: 10s
-      timeout: 5s
-      retries: 60
-      start_period: 30s
-    entrypoint:
-    - bash
-    - /opt/recipe/mooncake-store-entrypoint.sh
   sglang:
-    platform: linux/amd64
-    image: local/glm-5.1-nvfp4-mooncake-separate:tracing
-    restart: ${RESTART_POLICY:-unless-stopped}
-    stop_grace_period: 1m
-    ipc: host
-    shm_size: 64gb
     cap_add:
     - SYS_NICE
     - IPC_LOCK
-    security_opt:
-    - seccomp:unconfined
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-      stack: 67108864
-    depends_on:
-      mooncake-store:
-        condition: service_healthy
-      otel-collector:
-        condition: service_started
+    environment:
+      OMP_NUM_THREADS: '32'
+      OTEL_BSP_MAX_EXPORT_BATCH_SIZE: '256'
+      OTEL_BSP_MAX_QUEUE_SIZE: '2048'
+      OTEL_BSP_SCHEDULE_DELAY: '1000'
+      OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: grpc
+      OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: 'false'
+      OTEL_SERVICE_NAME: sglang
+      OTEL_TRACES_SAMPLER: parentbased_always_on
+      SGLANG_ADMIN_API_KEY: ${SGLANG_ADMIN_API_KEY:?set SGLANG_ADMIN_API_KEY}
+      SGLANG_API_KEY: ${SGLANG_API_KEY:?set SGLANG_API_KEY}
+      SGLANG_DG_CACHE_DIR: /cache/dg
+      SGLANG_ENABLE_SPEC_V2: '1'
+      SGLANG_TRACE_LEVEL: '1'
+      TORCHINDUCTOR_CACHE_DIR: /cache/torchinductor
+      TRITON_CACHE_DIR: /cache/triton
+      TZ: Europe/Moscow
+      PYTHONHASHSEED: '0'
+    gpus:
+    - count: -1
+    healthcheck:
+      test:
+      - CMD
+      - python3
+      - -c
+      - import os,urllib.request; r=urllib.request.Request('http://127.0.0.1:30000/health',headers={'Authorization':'Bearer '+os.environ['SGLANG_API_KEY']}); urllib.request.urlopen(r,timeout=5).read()
+      interval: 30s
+      timeout: 10s
+      retries: 60
+      start_period: 10m
+    image: lmsysorg/sglang:v0.5.19@sha256:d6e7288627be8b02be88e4bba38e73f6d50e2826869f753c13a4c4385ab3eda9
+    ipc: host
+    logging:
+      driver: json-file
+      options:
+        max-file: '5'
+        max-size: 100m
     networks:
       mooncake-internal:
         ipv4_address: 172.29.0.4
-    ports:
-    - 127.0.0.1:${ENGINE_PORT:-30001}:30000
-    gpus: all
-    environment:
-      TZ: Europe/Moscow
-      TRITON_CACHE_DIR: /cache/triton
-      TORCHINDUCTOR_CACHE_DIR: /cache/torchinductor
-      SGLANG_DG_CACHE_DIR: /cache/dg
-      OMP_NUM_THREADS: '32'
-      SGLANG_ENABLE_SPEC_V2: '1'
-      MC_STORE_MEMCPY: '1'
-      SGLANG_ADMIN_API_KEY: ${SGLANG_ADMIN_API_KEY:?set SGLANG_ADMIN_API_KEY}
-      OTEL_TRACES_SAMPLER: parentbased_always_on
-      OTEL_SERVICE_NAME: sglang
-      OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: grpc
-      OTEL_BSP_MAX_QUEUE_SIZE: '2048'
-      OTEL_BSP_MAX_EXPORT_BATCH_SIZE: '256'
-      OTEL_BSP_SCHEDULE_DELAY: '1000'
-      OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: 'false'
-      SGLANG_TRACE_LEVEL: ${SGLANG_TRACE_LEVEL:-1}
-      OTLP_TRACES_ENDPOINT: otel-collector:4317
-      SGLANG_API_KEY: ${SGLANG_API_KEY:?set SGLANG_API_KEY}
+    platform: linux/amd64
+    restart: unless-stopped
+    security_opt:
+    - seccomp:unconfined
+    shm_size: '68719476736'
+    stop_grace_period: 1m0s
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      stack: 67108864
     volumes:
     - /opt/models:/models
     - ./logs:/logs
     - ./cache/torchinductor:/cache/torchinductor
     - ./cache/triton:/cache/triton
     - ./cache/dg:/cache/dg
-    - ./sglang-entrypoint.sh:/opt/recipe/sglang-entrypoint.sh:ro
-    logging:
-      driver: json-file
-      options:
-        max-size: 100m
-        max-file: '5'
-    healthcheck:
-      test:
-      - CMD-SHELL
-      - curl -fsS http://127.0.0.1:30000/health || exit 1
-      interval: 30s
-      timeout: 10s
-      retries: 10
-      start_period: 240s
-    entrypoint:
-    - bash
-    - /opt/recipe/sglang-entrypoint.sh
-    build:
-      context: ../../misc/telemetry
-      dockerfile: Dockerfile.sglang
-      args:
-        SGLANG_BASE_IMAGE: lmsysorg/sglang:v0.5.12.post1-cu130
+    depends_on:
+      otel-collector:
+        condition: service_started
+    entrypoint: >-
+      numactl --interleave=all python3 -m sglang.launch_server
+      --enable-trace
+      --otlp-traces-endpoint otel-collector:4317
+      --api-key '${SGLANG_API_KEY:?set SGLANG_API_KEY}'
+      --model-path /models/GLM-5.1-NVFP4
+      --quantization modelopt_fp4
+      --served-model-name glm
+      --host 0.0.0.0
+      --port 30000
+      --admin-api-key '${SGLANG_ADMIN_API_KEY:?set SGLANG_ADMIN_API_KEY}'
+      --attention-backend dsa
+      --moe-runner-backend flashinfer_trtllm
+      --flashinfer-allreduce-fusion-backend auto
+      --context-length 202752
+      --reasoning-parser glm45
+      --tool-call-parser glm47
+      --trust-remote-code
+      --kv-cache-dtype fp8_e4m3
+      --page-size 64
+      --chunked-prefill-size 65536
+      --max-prefill-tokens 32768
+      --cuda-graph-max-bs 18
+      --max-running-requests 128
+      --enable-dp-attention
+      --enable-dp-lm-head
+      --load-balance-method total_tokens
+      --schedule-policy lpm
+      --mem-fraction-static 0.85
+      --enable-metrics
+      --enable-custom-logit-processor
+      --enable-cache-report
+      --model-loader-extra-config '{"enable_multithread_load":true,"num_threads":128}'
+      --tp-size 8
+      --dp-size 8
+      --dsa-prefill-backend trtllm
+      --dsa-decode-backend trtllm
+      --default-chat-template-kwargs '{"enable_thinking":true}'
+    command: []
   smg:
     extends:
       file: ../../misc/telemetry/compose.services.yaml
       service: smg
     command: >-
       --host 0.0.0.0
-      --port 30000
-      --worker-urls 'http://${SMG_WORKER_SERVICE:-sglang}:30000'
+      --port 30001
+      --worker-urls http://sglang:30000
       --backend sglang
       --dp-aware
       --policy cache_aware
@@ -186,31 +119,30 @@ services:
       --enable-trace
       --otlp-traces-endpoint otel-collector:4317
       --prometheus-host 0.0.0.0
-      --prometheus-port 29000
+      --prometheus-port 9234
       --health-check-endpoint /health
       --worker-startup-timeout-secs 1800
       --request-timeout-secs 1800
+    ports:
+    - 127.0.0.1:30001:30001
     depends_on:
       otel-collector:
         condition: service_started
-    ports:
-    - ${SMG_BIND:-127.0.0.1}:${SMG_PORT:-30000}:30000
-    - 127.0.0.1:${SMG_METRICS_PORT:-29000}:29000
     networks:
     - mooncake-internal
-    restart: ${RESTART_POLICY:-unless-stopped}
   otel-collector:
     extends:
       file: ../../misc/telemetry/compose.services.yaml
       service: otel-collector
     environment:
       OTLP_UPSTREAM_ENDPOINT: ${OTLP_UPSTREAM_ENDPOINT:?set external OTLP gRPC endpoint}
-      OTLP_UPSTREAM_INSECURE: ${OTLP_UPSTREAM_INSECURE:-false}
+      OTLP_UPSTREAM_INSECURE: 'false'
+      ENGINE_METRICS_TARGET: sglang:30000
+      ENGINE_API_KEY: ${SGLANG_API_KEY:?set SGLANG_API_KEY}
       TELEMETRY_RECIPE: glm-5.1-nvfp4-mooncake-separate
-      TELEMETRY_ENVIRONMENT: ${TELEMETRY_ENVIRONMENT:-production}
+      TELEMETRY_ENVIRONMENT: production
     networks:
     - mooncake-internal
-    restart: ${RESTART_POLICY:-unless-stopped}
 networks:
   mooncake-internal:
     driver: bridge

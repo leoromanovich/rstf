@@ -32,8 +32,13 @@ compose=(
   --file "$recipe_dir/docker-compose.yaml"
   --env-file "$env_file"
 )
+case "${RECIPE_CACHE:-none}" in
+  none) ;;
+  ram|ssd) compose+=(--file "$recipe_dir/compose.${RECIPE_CACHE}.yaml") ;;
+  *) printf 'invalid RECIPE_CACHE\n' >&2; exit 2 ;;
+esac
 if [[ "$mode" == "mtp" ]]; then
-  compose+=(--profile mtp)
+  compose+=(--file "$recipe_dir/compose.mtp.yaml" --profile mtp)
   service=gemma4-mtp
 else
   service=gemma4

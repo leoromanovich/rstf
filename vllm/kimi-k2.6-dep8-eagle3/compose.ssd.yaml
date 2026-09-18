@@ -1,0 +1,8 @@
+services:
+  vllm-kimi-k26:
+    command: >-
+      --kv-offloading-size 100
+      --kv-offloading-backend native
+      --kv-transfer-config '{"kv_connector":"OffloadingConnector","kv_role":"kv_both","kv_connector_extra_config":{"spec_name":"TieringOffloadingSpec","eviction_policy":"lru","offload_prompt_only":true,"secondary_tiers":[{"type":"fs","root_dir":"/kv-cache","n_read_threads":32,"n_write_threads":16}]}}'
+    volumes:
+    - ./cache/kv/kimi-k2.6-dep8-eagle3-v026:/kv-cache
